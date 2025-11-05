@@ -10,8 +10,8 @@ import time
 from datetime import datetime, timedelta, timezone
 from functools import reduce
 from pathlib import Path as FilePath
-from typing import Any, List
-from urllib.parse import unquote
+from typing import Any
+from urllib.parse import quote, unquote
 
 import cv2
 import numpy as np
@@ -834,6 +834,46 @@ async def recording_clip(
     )
 
 
+@router.get("/vod/transcode")
+def clip(request: Request, file: str):
+    config: FrigateConfig = request.app.frigate_config
+
+    def transcode(input: str, output: str):
+        ffmpeg_cmd = [
+            config.ffmpeg.ffmpeg_path,
+            "-hide_banner",
+            "-hwaccel",
+            "qsv",
+            "-hwaccel_output_format",
+            "qsv",
+            "-i",
+            input,
+            "-vf",
+            "scale_qsv=854:480",
+            "-c:v",
+            "h264_qsv",
+            "-c:a",
+            "copy",
+            "-f",
+            "mp4",
+            output,
+        ]
+        with sp.Popen(
+            ffmpeg_cmd,
+            stdout=sp.PIPE,
+            stderr=sp.PIPE,
+            text=False,
+            bufsize=0,
+        ) as ffmpeg:
+            ret = ffmpeg.wait()
+            if ret != 0:
+                raise Exception("Failed to transcode!")
+
+    cache = request.app.temp_file_cache
+    transcoded_path = cache.get(file, lambda output: transcode(file, output))
+    return FileResponse(transcoded_path, media_type="video/mp4")
+
+
 @router.get(
     "/vod/{camera_name}/start/{start_ts}/end/{end_ts}",
     dependencies=[Depends(require_camera_access)],
@@ -883,8 +923,11 @@ async def vod_ts(
             recording.end_time,
             recording.duration,
         )
-
-        clip = {"type": "source", "path": recording.path}
+        clip = {
+            "type": "source",
+            "sourceType": "http",
+            "path": f"/{quote(recording.path, safe='')}",
+        }
         duration = int(recording.duration * 1000)
 
         # adjust start offset if start_ts is after recording.start_time
