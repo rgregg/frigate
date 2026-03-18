@@ -1,11 +1,14 @@
+import logging
 import os
 import tempfile
 import threading
 import time
 
+logger = logging.getLogger(__name__)
+
 
 class TempFileCache:
-    def __init__(self, ttl_seconds=300, cleanup_interval=1):
+    def __init__(self, ttl_seconds=300, cleanup_interval=60):
         self.ttl = ttl_seconds
         self.cleanup_interval = cleanup_interval
 
@@ -40,9 +43,13 @@ class TempFileCache:
             time.sleep(self.cleanup_interval)
 
     def stop(self):
-        """Stop the cleanup thread."""
+        """Stop the cleanup thread and clean up all cached files."""
         self._stop = True
         self.thread.join(timeout=2)
+        with self.lock:
+            for path, _ in self.cache.values():
+                self._remove_file(path)
+            self.cache.clear()
 
     def get(self, key, generator_fn):
         with self.lock:
@@ -57,25 +64,32 @@ class TempFileCache:
             while key in self.pending:
                 self.lock.wait()
 
+            # Check again after waiting — another thread may have populated it
+            if key in self.cache:
+                path, ts = self.cache[key]
+                self.cache[key] = (path, time.time())
+                return path
+
             # Mark this key as pending generation
             self.pending.add(key)
 
         # Outside lock: generate the file
-        path = tempfile.mktemp()
+        fd, path = tempfile.mkstemp(suffix=".mp4")
+        os.close(fd)
 
         try:
             generator_fn(path)
         except Exception:
             self._remove_file(path)
             with self.lock:
-                self.pending.remove(key)
+                self.pending.discard(key)
                 self.lock.notify_all()
             raise
 
         # Store file and notify waiters
         with self.lock:
             self.cache[key] = (path, time.time())
-            self.pending.remove(key)
+            self.pending.discard(key)
             self.lock.notify_all()
 
         return path

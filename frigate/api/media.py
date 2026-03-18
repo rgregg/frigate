@@ -835,43 +835,70 @@ async def recording_clip(
 
 
 @router.get("/vod/transcode")
-def clip(request: Request, file: str):
+def vod_transcode(request: Request, file: str):
+    """Transcode a recording file on the fly for lower-bandwidth playback."""
     config: FrigateConfig = request.app.frigate_config
 
-    def transcode(input: str, output: str):
-        ffmpeg_cmd = [
-            config.ffmpeg.ffmpeg_path,
-            "-hide_banner",
-            "-hwaccel",
-            "qsv",
-            "-hwaccel_output_format",
-            "qsv",
-            "-i",
-            input,
-            "-vf",
-            "scale_qsv=854:480",
-            "-c:v",
-            "h264_qsv",
-            "-c:a",
-            "copy",
-            "-f",
-            "mp4",
-            output,
-        ]
+    def transcode(input_path: str, output_path: str):
+        ffmpeg_cmd = _build_transcode_cmd(config, input_path, output_path)
+        logger.info("Transcoding %s with command: %s", input_path, " ".join(ffmpeg_cmd))
         with sp.Popen(
             ffmpeg_cmd,
             stdout=sp.PIPE,
             stderr=sp.PIPE,
-            text=False,
-            bufsize=0,
-        ) as ffmpeg:
-            ret = ffmpeg.wait()
-            if ret != 0:
-                raise Exception("Failed to transcode!")
+        ) as proc:
+            _, stderr = proc.communicate()
+            if proc.returncode != 0:
+                logger.error(
+                    "Transcode failed for %s (exit %d): %s",
+                    input_path,
+                    proc.returncode,
+                    stderr.decode(errors="replace") if stderr else "",
+                )
+                raise RuntimeError(f"Transcode failed with exit code {proc.returncode}")
 
     cache = request.app.temp_file_cache
     transcoded_path = cache.get(file, lambda output: transcode(file, output))
     return FileResponse(transcoded_path, media_type="video/mp4")
+
+
+def _build_transcode_cmd(
+    config: FrigateConfig, input_path: str, output_path: str
+) -> list[str]:
+    """Build an ffmpeg command for transcoding playback, using hwaccel if available."""
+    hwaccel_args = config.ffmpeg.hwaccel_args
+    preset = hwaccel_args if isinstance(hwaccel_args, str) else ""
+
+    cmd = [config.ffmpeg.ffmpeg_path, "-hide_banner", "-loglevel", "warning"]
+
+    # Hardware-accelerated decode + scale + encode based on preset
+    if "qsv" in preset:
+        cmd += ["-hwaccel", "qsv", "-hwaccel_output_format", "qsv"]
+        cmd += ["-i", input_path]
+        cmd += ["-vf", "scale_qsv=w=854:h=480"]
+        cmd += ["-c:v", "h264_qsv"]
+    elif "vaapi" in preset:
+        cmd += [
+            "-hwaccel", "vaapi",
+            "-hwaccel_output_format", "vaapi",
+            "-hwaccel_device", "/dev/dri/renderD128",
+        ]
+        cmd += ["-i", input_path]
+        cmd += ["-vf", "scale_vaapi=w=854:h=480"]
+        cmd += ["-c:v", "h264_vaapi"]
+    elif "nvidia" in preset or "cuda" in preset:
+        cmd += ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]
+        cmd += ["-i", input_path]
+        cmd += ["-vf", "scale_cuda=w=854:h=480"]
+        cmd += ["-c:v", "h264_nvenc", "-preset:v", "p2"]
+    else:
+        # Software fallback
+        cmd += ["-i", input_path]
+        cmd += ["-vf", "scale=854:480"]
+        cmd += ["-c:v", "libx264", "-preset:v", "fast"]
+
+    cmd += ["-c:a", "copy", "-movflags", "+faststart", "-f", "mp4", output_path]
+    return cmd
 
 
 @router.get(
@@ -884,6 +911,7 @@ async def vod_ts(
     start_ts: float,
     end_ts: float,
     force_discontinuity: bool = False,
+    transcode: bool = False,
 ):
     logger.debug(
         "VOD: Generating VOD for %s from %s to %s with force_discontinuity=%s",
@@ -923,11 +951,14 @@ async def vod_ts(
             recording.end_time,
             recording.duration,
         )
-        clip = {
-            "type": "source",
-            "sourceType": "http",
-            "path": f"/{quote(recording.path, safe='')}",
-        }
+        if transcode:
+            clip = {
+                "type": "source",
+                "sourceType": "http",
+                "path": f"/{quote(recording.path, safe='')}",
+            }
+        else:
+            clip = {"type": "source", "path": recording.path}
         duration = int(recording.duration * 1000)
 
         # adjust start offset if start_ts is after recording.start_time
