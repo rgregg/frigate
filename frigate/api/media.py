@@ -858,8 +858,19 @@ def vod_transcode(request: Request, file: str):
                 raise RuntimeError(f"Transcode failed with exit code {proc.returncode}")
 
     cache = request.app.temp_file_cache
-    transcoded_path = cache.get(file, lambda output: transcode(file, output))
-    return FileResponse(transcoded_path, media_type="video/mp4")
+    try:
+        transcoded_path = cache.get(file, lambda output: transcode(file, output))
+        return FileResponse(transcoded_path, media_type="video/mp4")
+    except Exception:
+        logger.warning(
+            "Transcode failed for %s, falling back to original file", file
+        )
+        if os.path.exists(file):
+            return FileResponse(file, media_type="video/mp4")
+        return JSONResponse(
+            content={"success": False, "message": "File not found"},
+            status_code=404,
+        )
 
 
 def _build_transcode_cmd(
