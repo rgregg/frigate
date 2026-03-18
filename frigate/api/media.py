@@ -1,6 +1,7 @@
 """Image and video apis."""
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import glob
 import logging
 import math
@@ -888,6 +889,71 @@ def vod_transcode(request: Request, file: str):
         )
 
 
+def _batch_transcode(
+    request: Request, recording_paths: list[str], max_workers: int = 4
+) -> dict[str, str]:
+    """Transcode a list of recordings in parallel, prioritized by list order.
+
+    Submits transcoding jobs to a thread pool in the order given (earliest
+    recording first) so that segments needed for playback start are ready
+    first. Returns a dict mapping original path -> transcoded path.
+    """
+    config: FrigateConfig = request.app.frigate_config
+    cache = request.app.temp_file_cache
+
+    # Skip paths already in cache — no work needed
+    uncached = [p for p in recording_paths if p not in cache.cache]
+    cached_count = len(recording_paths) - len(uncached)
+    if cached_count:
+        logger.debug("Transcode batch: %d/%d already cached", cached_count, len(recording_paths))
+
+    def transcode_one(path: str) -> tuple[str, str]:
+        def do_transcode(output_path: str):
+            ffmpeg_cmd = _build_transcode_cmd(config, path, output_path)
+            logger.info("Transcoding %s", path)
+            with sp.Popen(ffmpeg_cmd, stdout=sp.PIPE, stderr=sp.PIPE) as proc:
+                _, stderr = proc.communicate()
+                if proc.returncode != 0:
+                    logger.error(
+                        "Transcode failed for %s (exit %d): %s",
+                        path,
+                        proc.returncode,
+                        stderr.decode(errors="replace") if stderr else "",
+                    )
+                    raise RuntimeError(f"Transcode failed with exit code {proc.returncode}")
+
+        try:
+            return (path, cache.get(path, do_transcode))
+        except Exception:
+            logger.warning("Transcode failed for %s, using original", path)
+            return (path, path)
+
+    result = {}
+
+    # Resolve already-cached entries immediately
+    for path in recording_paths:
+        if path not in uncached:
+            try:
+                result[path] = cache.get(path, lambda _: None)
+            except Exception:
+                result[path] = path
+
+    # Transcode uncached entries in parallel, submitted in time order
+    if uncached:
+        logger.info(
+            "Transcoding %d segments (%d cached) with %d workers",
+            len(uncached), cached_count, max_workers,
+        )
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # submit in order — executor picks up earliest segments first
+            futures = [executor.submit(transcode_one, p) for p in uncached]
+            for future in futures:
+                path, transcoded = future.result()
+                result[path] = transcoded
+
+    return result
+
+
 def _transcode_recording(request: Request, recording_path: str) -> str:
     """Transcode a recording file and return the path to the transcoded file.
 
@@ -1005,8 +1071,17 @@ async def vod_ts(
     min_duration_ms = 100  # Minimum 100ms to ensure at least one video frame
     max_duration_ms = MAX_SEGMENT_DURATION * 1000
 
+    # Materialize recordings list so we can batch-transcode if needed
+    recording_list = list(recordings)
+
+    # Pre-transcode all segments in time order with parallel workers
+    if transcode and request and recording_list:
+        transcoded_map = _batch_transcode(request, [r.path for r in recording_list])
+    else:
+        transcoded_map = {}
+
     recording: Recordings
-    for recording in recordings:
+    for recording in recording_list:
         logger.debug(
             "VOD: processing recording: %s start=%s end=%s duration=%s",
             recording.path,
@@ -1014,9 +1089,8 @@ async def vod_ts(
             recording.end_time,
             recording.duration,
         )
-        if transcode:
-            transcoded_path = _transcode_recording(request, recording.path)
-            clip = {"type": "source", "path": transcoded_path}
+        if transcode and recording.path in transcoded_map:
+            clip = {"type": "source", "path": transcoded_map[recording.path]}
         else:
             clip = {"type": "source", "path": recording.path}
         duration = int(recording.duration * 1000)
