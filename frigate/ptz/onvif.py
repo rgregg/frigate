@@ -574,12 +574,6 @@ class OnvifController:
                     "y": speed,
                 },
             }
-            # Ensure no residual zoom from previous calls
-            try:
-                if move_request.Translation is not None:
-                    move_request.Translation.Zoom = None
-            except (AttributeError, KeyError):
-                pass
 
         await self.cams[camera_name]["ptz"].RelativeMove(move_request)
 
