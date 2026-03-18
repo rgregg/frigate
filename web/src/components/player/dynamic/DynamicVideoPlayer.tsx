@@ -19,6 +19,7 @@ import {
   calculateSeekPosition,
 } from "@/utils/videoUtil";
 import { isFirefox } from "react-device-detect";
+import { usePersistence } from "@/hooks/use-persistence";
 
 /**
  * Dynamically switches between video playback and scrubbing preview player.
@@ -62,6 +63,12 @@ export default function DynamicVideoPlayer({
   const { t } = useTranslation(["components/player"]);
   const apiHost = useApiHost();
   const { data: config } = useSWR<FrigateConfig>("config");
+
+  // transcoding preference (persisted, defaults to on)
+  const [transcode, setTranscode] = usePersistence<boolean>(
+    "playbackTranscode",
+    true,
+  );
 
   // for detail stream context in History
   const {
@@ -210,13 +217,14 @@ export default function DynamicVideoPlayer({
       );
     }
 
+    const transcodeParam = transcode ? "?transcode=true" : "";
     setSource({
-      playlist: `${apiHost}vod/${camera}/start/${recordingParams.after}/end/${recordingParams.before}/master.m3u8`,
+      playlist: `${apiHost}vod/${camera}/start/${recordingParams.after}/end/${recordingParams.before}/master.m3u8${transcodeParam}`,
       startPosition,
     });
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [recordings]);
+  }, [recordings, transcode]);
 
   useEffect(() => {
     if (!controller || !recordings?.length) {
@@ -335,6 +343,20 @@ export default function DynamicVideoPlayer({
         <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
           {t("noRecordingsFoundForThisTime")}
         </div>
+      )}
+      {!isScrubbing && (
+        <button
+          className={cn(
+            "absolute right-2 top-2 z-50 rounded px-2 py-1 text-xs font-medium transition-opacity",
+            transcode
+              ? "bg-selected text-white"
+              : "bg-background/60 text-primary",
+          )}
+          onClick={() => setTranscode(!transcode)}
+          title={transcode ? "Transcoding on (lower bandwidth)" : "Transcoding off (full quality)"}
+        >
+          {transcode ? "SD" : "HD"}
+        </button>
       )}
     </>
   );
