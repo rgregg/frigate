@@ -10,7 +10,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from functools import reduce
 from pathlib import Path as FilePath
-from typing import Any
+from typing import Any, List
 from urllib.parse import quote, unquote
 
 import cv2
