@@ -279,7 +279,7 @@ export default function DynamicVideoPlayer({
   );
 
   return (
-    <>
+    <div className="relative h-full w-full">
       {source && (
         <HlsVideoPlayer
           videoRef={playerRef}
@@ -358,6 +358,6 @@ export default function DynamicVideoPlayer({
           {transcode ? "SD" : "HD"}
         </button>
       )}
-    </>
+    </div>
   );
 }
