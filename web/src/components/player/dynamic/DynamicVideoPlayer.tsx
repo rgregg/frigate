@@ -217,9 +217,9 @@ export default function DynamicVideoPlayer({
       );
     }
 
-    const transcodeParam = transcode ? "?transcode=true" : "";
+    const vodPath = transcode ? "vod/sd" : "vod";
     setSource({
-      playlist: `${apiHost}vod/${camera}/start/${recordingParams.after}/end/${recordingParams.before}/master.m3u8${transcodeParam}`,
+      playlist: `${apiHost}${vodPath}/${camera}/start/${recordingParams.after}/end/${recordingParams.before}/master.m3u8`,
       startPosition,
     });
 

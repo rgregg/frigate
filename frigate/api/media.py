@@ -1158,6 +1158,19 @@ async def vod_event(
 
 
 @router.get(
+    "/vod/sd/{camera_name}/start/{start_ts}/end/{end_ts}",
+    dependencies=[Depends(require_camera_access)],
+    description="Returns an HLS playlist with transcoded (lower resolution) segments. Append /master.m3u8 or /index.m3u8 for HLS playback.",
+)
+async def vod_sd(
+    camera_name: str,
+    start_ts: float,
+    end_ts: float,
+):
+    return await vod_ts(camera_name, start_ts, end_ts, transcode=True)
+
+
+@router.get(
     "/vod/clip/{camera_name}/start/{start_ts}/end/{end_ts}",
     dependencies=[Depends(require_camera_access)],
     description="Returns an HLS playlist for a timestamp range with HLS discontinuity enabled. Append /master.m3u8 or /index.m3u8 for HLS playback.",
