@@ -888,6 +888,36 @@ def vod_transcode(request: Request, file: str):
         )
 
 
+def _transcode_recording(request: Request, recording_path: str) -> str:
+    """Transcode a recording file and return the path to the transcoded file.
+
+    Uses the TempFileCache so repeated requests for the same recording
+    return the cached result.
+    """
+    config: FrigateConfig = request.app.frigate_config
+    cache = request.app.temp_file_cache
+
+    def do_transcode(output_path: str):
+        ffmpeg_cmd = _build_transcode_cmd(config, recording_path, output_path)
+        logger.info("Transcoding %s", recording_path)
+        with sp.Popen(ffmpeg_cmd, stdout=sp.PIPE, stderr=sp.PIPE) as proc:
+            _, stderr = proc.communicate()
+            if proc.returncode != 0:
+                logger.error(
+                    "Transcode failed for %s (exit %d): %s",
+                    recording_path,
+                    proc.returncode,
+                    stderr.decode(errors="replace") if stderr else "",
+                )
+                raise RuntimeError(f"Transcode failed with exit code {proc.returncode}")
+
+    try:
+        return cache.get(recording_path, do_transcode)
+    except Exception:
+        logger.warning("Transcode failed for %s, using original", recording_path)
+        return recording_path
+
+
 def _build_transcode_cmd(
     config: FrigateConfig, input_path: str, output_path: str
 ) -> list[str]:
@@ -944,6 +974,7 @@ async def vod_ts(
     end_ts: float,
     force_discontinuity: bool = False,
     transcode: bool = False,
+    request: Request = None,
 ):
     logger.debug(
         "VOD: Generating VOD for %s from %s to %s with force_discontinuity=%s",
@@ -984,11 +1015,8 @@ async def vod_ts(
             recording.duration,
         )
         if transcode:
-            clip = {
-                "type": "source",
-                "sourceType": "http",
-                "path": f"/{quote(recording.path, safe='')}",
-            }
+            transcoded_path = _transcode_recording(request, recording.path)
+            clip = {"type": "source", "path": transcoded_path}
         else:
             clip = {"type": "source", "path": recording.path}
         duration = int(recording.duration * 1000)
@@ -1163,11 +1191,12 @@ async def vod_event(
     description="Returns an HLS playlist with transcoded (lower resolution) segments. Append /master.m3u8 or /index.m3u8 for HLS playback.",
 )
 async def vod_sd(
+    request: Request,
     camera_name: str,
     start_ts: float,
     end_ts: float,
 ):
-    return await vod_ts(camera_name, start_ts, end_ts, transcode=True)
+    return await vod_ts(camera_name, start_ts, end_ts, transcode=True, request=request)
 
 
 @router.get(
