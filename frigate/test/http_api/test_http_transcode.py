@@ -36,21 +36,21 @@ class TestBuildTranscodeCmd(unittest.TestCase):
         cmd = _build_transcode_cmd(config, "/input.mp4", "/output.mp4")
         assert "qsv" in cmd
         assert "h264_qsv" in cmd
-        assert "scale_qsv=w=854:h=480" in cmd
+        assert "scale_qsv=w=-2:h=480" in cmd
 
     def test_vaapi_preset(self):
         config = self._make_config("preset-vaapi")
         cmd = _build_transcode_cmd(config, "/input.mp4", "/output.mp4")
         assert "vaapi" in cmd
         assert "h264_vaapi" in cmd
-        assert "scale_vaapi=w=854:h=480" in cmd
+        assert "scale_vaapi=w=-2:h=480" in cmd
 
     def test_nvidia_preset(self):
         config = self._make_config("preset-nvidia-h264")
         cmd = _build_transcode_cmd(config, "/input.mp4", "/output.mp4")
         assert "cuda" in cmd
         assert "h264_nvenc" in cmd
-        assert "scale_cuda=w=854:h=480" in cmd
+        assert "scale_cuda=w=-2:h=480" in cmd
 
     def test_unknown_preset_falls_back_to_software(self):
         config = self._make_config("preset-rpi-64-h264")

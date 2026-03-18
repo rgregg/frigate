@@ -891,17 +891,23 @@ def vod_transcode(request: Request, file: str):
 def _build_transcode_cmd(
     config: FrigateConfig, input_path: str, output_path: str
 ) -> list[str]:
-    """Build an ffmpeg command for transcoding playback, using hwaccel if available."""
+    """Build an ffmpeg command for transcoding playback, using hwaccel if available.
+
+    Scales video so the height is at most 480px while preserving the original
+    aspect ratio. Width is computed automatically and rounded to an even number.
+    """
     hwaccel_args = config.ffmpeg.hwaccel_args
     preset = hwaccel_args if isinstance(hwaccel_args, str) else ""
 
     cmd = [config.ffmpeg.ffmpeg_path, "-hide_banner", "-loglevel", "warning"]
 
-    # Hardware-accelerated decode + scale + encode based on preset
+    # Hardware-accelerated decode + scale + encode based on preset.
+    # Use -2 for width so ffmpeg auto-computes it from the aspect ratio
+    # and ensures the result is divisible by 2 (required by most encoders).
     if "qsv" in preset:
         cmd += ["-hwaccel", "qsv", "-hwaccel_output_format", "qsv"]
         cmd += ["-i", input_path]
-        cmd += ["-vf", "scale_qsv=w=854:h=480"]
+        cmd += ["-vf", "scale_qsv=w=-2:h=480"]
         cmd += ["-c:v", "h264_qsv"]
     elif "vaapi" in preset:
         cmd += [
@@ -910,17 +916,17 @@ def _build_transcode_cmd(
             "-hwaccel_device", "/dev/dri/renderD128",
         ]
         cmd += ["-i", input_path]
-        cmd += ["-vf", "scale_vaapi=w=854:h=480"]
+        cmd += ["-vf", "scale_vaapi=w=-2:h=480"]
         cmd += ["-c:v", "h264_vaapi"]
     elif "nvidia" in preset or "cuda" in preset:
         cmd += ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]
         cmd += ["-i", input_path]
-        cmd += ["-vf", "scale_cuda=w=854:h=480"]
+        cmd += ["-vf", "scale_cuda=w=-2:h=480"]
         cmd += ["-c:v", "h264_nvenc", "-preset:v", "p2"]
     else:
         # Software fallback
         cmd += ["-i", input_path]
-        cmd += ["-vf", "scale=854:480"]
+        cmd += ["-vf", "scale=-2:480"]
         cmd += ["-c:v", "libx264", "-preset:v", "fast"]
 
     cmd += ["-c:a", "copy", "-movflags", "+faststart", "-f", "mp4", output_path]
