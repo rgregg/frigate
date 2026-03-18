@@ -255,22 +255,15 @@ class OnvifController:
                 status = None
 
             # Check for relative zoom support
-            zoom_spaces = getattr(
-                getattr(ptz_config, "Spaces", None),
-                "RelativeZoomTranslationSpace",
+            zoom_space_id = next(
+                (
+                    i
+                    for i, space in enumerate(
+                        ptz_config.Spaces.RelativeZoomTranslationSpace
+                    )
+                    if "TranslationGenericSpace" in space["URI"]
+                ),
                 None,
-            )
-            zoom_space_id = (
-                next(
-                    (
-                        i
-                        for i, space in enumerate(zoom_spaces)
-                        if "TranslationGenericSpace" in space["URI"]
-                    ),
-                    None,
-                )
-                if zoom_spaces
-                else None
             )
 
             # setup relative moving request (for click-to-move, drag-to-zoom, and autotracking)
@@ -278,7 +271,7 @@ class OnvifController:
                 move_request = ptz.create_type("RelativeMove")
                 move_request.ProfileToken = profile.token
                 logger.debug(f"{camera_name}: Relative move request: {move_request}")
-                if move_request.Translation is None and status is not None:
+                if move_request.Translation is None:
                     move_request.Translation = status.Position
                     move_request.Translation.PanTilt.space = ptz_config["Spaces"][
                         "RelativePanTiltTranslationSpace"
