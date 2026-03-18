@@ -837,6 +837,21 @@ async def recording_clip(
 @router.get("/vod/transcode")
 def vod_transcode(request: Request, file: str):
     """Transcode a recording file on the fly for lower-bandwidth playback."""
+    # Validate the file path is within the recordings directory
+    resolved = os.path.realpath(file)
+    if not resolved.startswith(os.path.realpath(RECORD_DIR) + os.sep):
+        logger.warning("Transcode request for path outside recordings dir: %s", file)
+        return JSONResponse(
+            content={"success": False, "message": "Invalid file path"},
+            status_code=403,
+        )
+
+    if not os.path.isfile(resolved):
+        return JSONResponse(
+            content={"success": False, "message": "File not found"},
+            status_code=404,
+        )
+
     config: FrigateConfig = request.app.frigate_config
 
     def transcode(input_path: str, output_path: str):

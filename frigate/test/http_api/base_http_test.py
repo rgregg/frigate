@@ -14,6 +14,7 @@ from frigate.api.fastapi_app import create_fastapi_app
 from frigate.config import FrigateConfig
 from frigate.const import BASE_DIR, CACHE_DIR
 from frigate.models import Event, Recordings, ReviewSegment
+from frigate.transcode.temp_file_cache import TempFileCache
 from frigate.review.types import SeverityEnum
 from frigate.test.const import TEST_DB, TEST_DB_CLEANUPS
 
@@ -134,6 +135,7 @@ class BaseTestHttp(unittest.TestCase):
         app = create_fastapi_app(
             FrigateConfig(**self.minimal_config),
             self.db,
+            TempFileCache(),
             None,
             None,
             None,
